@@ -1,0 +1,245 @@
+tracker.launch.py
+
+실행되는 Node:
+1. perception
+2. opencr
+3. control
+
+각 Node의 package: realsense_tracker
+
+각 Node의 executable:
+1. perception_node
+2. opencr_node
+3. control_node
+
+사용하는 YAML:
+1. camera.yaml
+2. tracker.yaml
+3. control.yaml
+4. opencr_live.yaml
+
+remapping: 없음
+
+
+
+# Project Architecture
+
+## 1. System Overview
+
+The project implements visual target tracking and two-axis camera movement. The
+runtime is intended to run on one Raspberry Pi: the RealSense camera, ROS 2
+nodes, and OpenCR USB serial bridge communicate locally through ROS 2/DDS.
+OpenCR runs separately as a microcontroller and controls the DYNAMIXEL motors.
+A remote PC may connect over SSH to operate the Pi, but SSH is not part of the
+ROS message path.
+
+```text
+RealSense D435
+    │ USB 3
+    ▼
+realsense2_camera
+    │ color image, aligned depth image
+    ▼
+perception_node ── /target ──▶ control_node
+                                  │ /tracking_status
+                                  │ /control/pan_tilt_cmd
+                                  ▼
+                              opencr_node
+                                  │ USB Serial, 115200 baud
+                                  ▼
+                           OpenCR firmware
+                                  │ DYNAMIXEL bus, 1 Mbps
+                                  ▼
+                         Pan and Tilt actuators
+```
+
+The main ROS 2 Python package is `realsense_tracker`. The custom
+`PanTiltCommand` message is defined by `realsense_tracker_interfaces`.
+
+## 2. Runtime Processes and Launch Behavior
+
+The main launch entry point is
+[`tracker.launch.py`](../ros2_ws/src/realsense_tracker/launch/tracker.launch.py).
+It can start the official `realsense2_camera` launch, `perception_node`,
+`control_node`, and `opencr_node`.
+
+| Process | Default in `tracker.launch.py` | Purpose |
+|---|---:|---|
+| `realsense2_camera` | Started (`start_realsense:=true`) | Publishes camera images and camera information |
+| `perception_node` | Started | Detects the target and publishes `/target` |
+| `control_node` | Not started (`start_control:=false`) | Converts target error to motion commands |
+| `opencr_node` | Not started (`start_opencr:=false`) | DRY sink or serial bridge, depending on configuration |
+
+The defaults are intentionally conservative: starting the launch does not
+enable the control loop or OpenCR bridge. Even when the LIVE serial bridge is
+started, motor torque and motion require explicit `/opencr/prepare` and
+`/opencr/arm` service calls.
+
+The launch accepts parameter/configuration paths for camera, perception,
+control, and OpenCR. It does not define topic remappings. The camera profile
+and wrapper topic names are in
+[`camera.yaml`](../ros2_ws/src/realsense_tracker/config/camera.yaml).
+
+The motor-free test launch,
+[`control_dry.launch.py`](../ros2_ws/src/realsense_tracker/launch/control_dry.launch.py),
+starts `control_node` and `opencr_node` with `control_dry.yaml`. In this mode
+`opencr_node` selects `DryBridge`, which never opens a serial port.
+
+## 3. ROS Node Responsibilities
+
+### `realsense2_camera`
+
+The official RealSense ROS wrapper captures the D435 stream. The main launch
+sets the color and depth profiles using `width`, `height`, and `fps` from
+`camera.yaml`, and enables depth alignment. The configured topics include:
+
+| Topic | Type | Consumer |
+|---|---|---|
+| `/camera/camera/color/image_raw` | `sensor_msgs/msg/Image` | `perception_node` |
+| `/camera/camera/aligned_depth_to_color/image_raw` | `sensor_msgs/msg/Image` | `perception_node` when depth is enabled |
+| `/camera/camera/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Available to other consumers; not required by the current perception flow |
+
+### `perception_node`
+
+Implementation: [`perception_node.py`](../ros2_ws/src/realsense_tracker/realsense_tracker/perception_node.py),
+with detection and image processing helpers in `detector.py`.
+
+- Subscribes to the configured color image and, when enabled, aligned depth
+  image. Image subscriptions use depth 1 and default to reliable QoS.
+- Runs target color/contour detection on each color frame. Depth is paired by
+  timestamp for distance calculation and optional validation; it is not
+  encoded as the target's `z` value.
+- Publishes `geometry_msgs/msg/PointStamped` on `/target`, preserving the
+  source color image timestamp:
+  - `point.x`: normalized horizontal image error `ex`
+  - `point.y`: normalized vertical image error `ey`
+  - `point.z`: detected contour area ratio; exactly zero means no target
+- Optionally publishes `/perception/debug_image`.
+- Logs detection transitions and periodic processing statistics. It has no
+  timer-based output; images trigger processing.
+
+Runtime parameters are in
+[`tracker.yaml`](../ros2_ws/src/realsense_tracker/config/tracker.yaml).
+Camera topic names are read from `camera.yaml`, which is a plain YAML file,
+not a ROS parameter file.
+
+### `control_node`
+
+Implementation: [`control_node.py`](../ros2_ws/src/realsense_tracker/realsense_tracker/control_node.py);
+control-state and proportional-control logic is in `control_core.py`.
+
+- Subscribes to `/target` as `geometry_msgs/msg/PointStamped`, best effort,
+  depth 1.
+- Publishes `/control/pan_tilt_cmd` as
+  `realsense_tracker_interfaces/msg/PanTiltCommand`, at 20 Hz and immediately
+  when transitioning to `LOST`.
+- Publishes `/tracking_status` as `std_msgs/msg/String` (`IDLE`, `TRACKING`,
+  or `LOST`).
+- Provides `/control/enable` as `std_srvs/srv/SetBool`.
+- Uses a 0.5-second default target timeout and requires three consecutive
+  fresh detected frames to recover to `TRACKING`.
+- Applies the configured proportional gains, deadbands, speed limits, and
+  direction signs. The direction conversion is performed here, not again in
+  the bridge.
+
+Production parameters are in
+[`control.yaml`](../ros2_ws/src/realsense_tracker/config/control.yaml).
+The core validates values at startup and publishes zero-velocity STOP output
+when tracking is disabled, the target is missing, or input is invalid or
+stale.
+
+### `opencr_node`
+
+Implementation: [`opencr_node.py`](../ros2_ws/src/realsense_tracker/realsense_tracker/opencr_node.py),
+with serial protocol/state handling in `serial_core.py` and motor-free input
+validation in `dry_bridge.py`.
+
+It subscribes to `/control/pan_tilt_cmd` and selects one of three modes from
+parameters:
+
+| Mode | Configuration | Hardware access | Status output |
+|---|---|---|---|
+| DRY sink | `control_dry.yaml` | Does not open serial | `/opencr/dry_status` |
+| Serial DRY | `serial_dry.yaml` | Opens serial to a DRY-mode board; firmware must not drive motors | `/opencr/bridge_status` |
+| Serial LIVE | `opencr_live.yaml` | Opens serial to a LIVE-mode board | `/opencr/bridge_status` |
+
+Serial modes require an explicit port and verify the expected firmware mode.
+The node polls and processes the serial protocol from a 10 ms timer. Serial
+LIVE exposes:
+
+| Service/topic | Type | Purpose |
+|---|---|---|
+| `/opencr/prepare` | `std_srvs/srv/Trigger` | Request firmware CHECK/HOLD; verifies the manually positioned neutral pose before torque-on hold |
+| `/opencr/arm` | `std_srvs/srv/Trigger` | Request motion enable only when READY and a fresh non-STOP command is available |
+| `/opencr/disarm` | `std_srvs/srv/Trigger` | Stop motion and remove the motion enable while retaining torque |
+| `/opencr/bridge_status` | `std_msgs/msg/String` containing JSON | Report bridge phase, fault reason, board state, and status age |
+
+The bridge rejects invalid, stale, or out-of-order commands. It does not
+automatically reconnect or re-arm after a fault. On node shutdown it attempts
+to send DISARM once.
+
+## 4. ROS Interfaces and Timing
+
+| Topic | Type | Publisher → subscriber | Notes |
+|---|---|---|---|
+| `/camera/camera/color/image_raw` | `sensor_msgs/msg/Image` | Camera wrapper → perception | Configured color stream |
+| `/camera/camera/aligned_depth_to_color/image_raw` | `sensor_msgs/msg/Image` | Camera wrapper → perception | Optional distance input |
+| `/target` | `geometry_msgs/msg/PointStamped` | Perception → control | `x=ex`, `y=ey`, `z=area_ratio`; best effort, depth 1 |
+| `/control/pan_tilt_cmd` | `realsense_tracker_interfaces/msg/PanTiltCommand` | Control → OpenCR bridge | STOP flag and Pan/Tilt angular velocity in rad/s |
+| `/tracking_status` | `std_msgs/msg/String` | Control → observers | Tracking state |
+| `/opencr/bridge_status` | `std_msgs/msg/String` | Serial bridge → observers | JSON bridge/board status |
+| `/opencr/dry_status` | `std_msgs/msg/String` | DRY sink → observers | JSON validation result; not physical feedback |
+
+`PanTiltCommand` contains a ROS header timestamp, `stop`, and Pan/Tilt velocity
+fields. A STOP command means both axes are commanded to zero regardless of
+the velocity fields. The control and bridge nodes run on the same Pi so their
+ROS timestamps use the same clock.
+
+The principal freshness/stop layers are:
+
+| Layer | Behavior |
+|---|---|
+| Control | Target timeout defaults to 0.5 s; missing/invalid target results in STOP |
+| Bridge | Rejects commands older than 0.15 s by default |
+| OpenCR firmware | While armed, command timeout is 300 ms; it zeros both axes and disarms while retaining torque |
+| Motor bus | Firmware configures a 200 ms DYNAMIXEL bus watchdog |
+
+## 5. Configuration Ownership
+
+| File | Consumer / role |
+|---|---|
+| `ros2_ws/src/realsense_tracker/config/camera.yaml` | Camera profile and wrapper topic names; also read directly by perception |
+| `ros2_ws/src/realsense_tracker/config/tracker.yaml` | Perception parameters |
+| `ros2_ws/src/realsense_tracker/config/control.yaml` | Production control parameters |
+| `ros2_ws/src/realsense_tracker/config/control_dry.yaml` | Fixed motor-free control/bridge test configuration |
+| `ros2_ws/src/realsense_tracker/config/serial_dry.yaml` | Serial bridge test against DRY firmware |
+| `ros2_ws/src/realsense_tracker/config/opencr_live.yaml` | LIVE bridge parameters and explicit hardware-enable setting |
+| `config/hardware.yaml` | Human-maintained hardware record; not read by runtime nodes |
+
+## 6. Safety and Configuration Caveat
+
+The firmware is the final authority for encoder-based travel limits and motor
+commands. The bridge requires explicit mode/configuration agreement, and LIVE
+motion is gated behind the prepare and arm services. Neutral position checks
+and STOP/FAULT handling are performed by the firmware/bridge layers rather
+than by integrating position in the ROS control node.
+
+**The configured speed limits currently disagree.** The production control
+configuration and `control_core.py` allow up to `0.3 rad/s`, while
+`tracking_controller_2axis.ino` defines `MAX_RAD_S` as `0.05 rad/s` and rejects
+larger VEL commands. The bridge's host-side limit is also currently `0.3
+rad/s`. Consequently, a command accepted by ROS may be rejected by the
+firmware. Treat the firmware limit as authoritative and reconcile the host
+and firmware settings before live operation.
+
+## 7. Tests and Non-Runtime Components
+
+- `test_control_dry.py` exercises perception-to-control and DRY sink behavior
+  with synthetic target messages.
+- `test_serial_pty.py` tests serial protocol handling through a pseudo-terminal.
+- `test_serial_ros.py` performs ROS-level bridge/control integration checks.
+- `tools/` contains capture, tuning, evaluation, and analysis utilities; these
+  are not tracking runtime nodes.
+- `results/` and `recordings/` contain experiment evidence and replay data;
+  they are not runtime services.
+
