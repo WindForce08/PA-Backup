@@ -1,0 +1,24 @@
+FreeCAD 1.1.4 src /home/pa31/GIT/FreeCAD/TeamRobot/Assembly/TeamRobot_Base_v5_Assembly.FCStd
+asset plate: 1 chunks, 11188 tris, 11112 verts, edges 574 segs, 0.0s, bbox dev 0.000
+asset pillar_L: 1 chunks, 8372 tris, 8340 verts, edges 439 segs, 0.0s, bbox dev 0.000
+asset pillar_R: 1 chunks, 8372 tris, 8340 verts, edges 439 segs, 0.0s, bbox dev 0.000
+asset Wheel_FL: 1 chunks, 1004 tris, 1008 verts, edges 152 segs, 0.0s, bbox dev 0.000
+asset Wheel_FR: 1 chunks, 1004 tris, 1008 verts, edges 152 segs, 0.0s, bbox dev 0.000
+asset Wheel_RL: 1 chunks, 1004 tris, 1008 verts, edges 152 segs, 0.0s, bbox dev 0.000
+asset Wheel_RR: 1 chunks, 1004 tris, 1008 verts, edges 152 segs, 0.0s, bbox dev 0.000
+asset Bracket_L1: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset Bracket_L2: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset Bracket_L3: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset Bracket_R1: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset Bracket_R2: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset Bracket_R3: 1 chunks, 1036 tris, 1044 verts, edges 72 segs, 0.0s, bbox dev 0.000
+asset GuideBlock_RR: 1 chunks, 20 tris, 36 verts, edges 18 segs, 0.0s, bbox dev 0.000
+asset GuideBlock_RL: 1 chunks, 20 tris, 36 verts, edges 18 segs, 0.0s, bbox dev 0.000
+asset GuideBlock_FR: 1 chunks, 20 tris, 36 verts, edges 18 segs, 0.0s, bbox dev 0.000
+asset GuideBlock_FL: 1 chunks, 20 tris, 36 verts, edges 18 segs, 0.0s, bbox dev 0.000
+asset motor: 4 chunks, 78722 tris, 69122 verts, edges 4072 segs, 0.1s, bbox dev 0.000
+Jetson features: 1920, 제외(2mm 미만) 1255, 거칠게 46, 상자 대체 39: ['155-GROGU-000', '155-GROGU-001', '155-GROGU-002', '155-GROGU-003', 'M1_6_0_35PITX4MM_MACHINE', 'M1_6_0_35PITX4MM_MACHINE001', 'M1_6_0_35PITX4MM_MACHINE002', 'WIRE_FAN_P3521', 'WIRE_FAN_P3522', 'WIRE_FAN_P3523', 'WIRE_FAN_P3524', 'COMPOUND016', 'COMPOUND262', 'COMPOUND266', 'SOLID005', 'SOLID006', 'SOLID007', 'COMPOUND272', 'COMPOUND300', 'COMPOUND342', 'COMPOUND345', 'COMPOUND348', 'COMPOUND351', 'COMPOUND371', 'COMPOUND375', 'COMPOUND378', '155-0899-000', '155-0899-001', '155-0899-002', '155-0899-003', '155-0900-000', '155-0900-001', '155-0900-002', '155-0900-003', 'P4M8A_VA_20220418C_1', '155-0576-000', '155-0576-001', 'COAXIAL_CABLE_WIFI_LEFT_P3526', 'COAXIAL_CABLE_WIFI_P3526']
+asset jetson: 50 chunks, 511797 tris, 437469 verts, edges 6195 segs, 0.4s
+fasteners {'motor': 16, 'pillar': 16, 'bracket': 12} nuts 12
+bin 7.35 MB, json 21.0 kB
+done
